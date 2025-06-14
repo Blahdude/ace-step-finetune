@@ -25,6 +25,41 @@ from torch.utils.data import DataLoader, Dataset
 import torch.distributed as dist # ADDED: Import torch.distributed for barrier
 from pytorch_lightning.callbacks import RichProgressBar
 
+# ─── Config & W&B Setup ───────────────────────────────────────────────────
+import argparse
+from omegaconf import OmegaConf
+import wandb
+import random
+import numpy as np
+import torch
+
+# 1) Load the config YAML instead of manual flags up here
+cfg_parser = argparse.ArgumentParser(add_help=False)
+cfg_parser.add_argument(
+    "--config_path",
+    type=str,
+    required=True,
+    help="Path to a Hydra/OmegaConf YAML defining all params"
+)
+cfg_args, _ = cfg_parser.parse_known_args()
+cfg = OmegaConf.load(cfg_args.config_path)
+
+# 2) Seed everything from the config
+seed = cfg.seed
+random.seed(seed)
+np.random.seed(seed)
+torch.manual_seed(seed)
+torch.cuda.manual_seed_all(seed)
+
+# 3) Init W&B with full config dump
+wandb.init(
+    project=cfg.logging.wandb.project,
+    config=OmegaConf.to_container(cfg, resolve=True),
+    tags=cfg.logging.wandb.tags
+)
+wandb.run.name = f"{cfg.test_id}_seed{cfg.seed}"
+# ─────────────────────────────────────────────────────────────────────────
+
 from acestep.pipeline_ace_step import ACEStepPipeline
 from acestep.schedulers.scheduling_flow_match_euler_discrete import (
     FlowMatchEulerDiscreteScheduler,

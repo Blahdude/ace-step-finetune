@@ -1,0 +1,24 @@
+project: ace-step-californication
+test_id: T2.2
+seed: 2222
+dataset:
+  path: ./datasets/downbeat_8bar_overlap
+  sample_rate: 44100
+  tags: qwen_section_tags
+training:
+  batch_size: 4
+  learning_rate: 3e-5
+  lora:
+    r: 16
+    alpha: 32
+  optimizer: adamw
+  max_steps: 2000
+  tag_dropout: 0.1
+  ssl_coeff: 0.3
+  accumulate_grad_batches: 2
+  gradient_clip_val: 1.0
+  gradient_clip_algorithm: norm
+logging:
+  wandb:
+    project: ace-step-californication
+    tags: ["dataset-2.2", "lora-r16-a32", "clip-norm"]
