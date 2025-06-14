@@ -1,0 +1,15 @@
+{
+    "prompt": "Funk,Upbeat,Energetic,Anthemic,Pop",
+    "lyrics": "[inst]",
+    "audio_duration": 170.63997916666668,
+    "infer_step": 60,
+    "guidance_scale": 5,
+    "scheduler_type": "euler",
+    "cfg_type": "apg",
+    "omega_scale": 1.5,
+    "manual_seeds": [
+        12346
+    ],
+    "lora_name_or_path": "/home/ocamp/projects/ACE-Step/checkpoints/californication/epoch=199-step=200_lora",
+    "lora_weight": 10
+}
