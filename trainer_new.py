@@ -33,7 +33,7 @@ import random
 import numpy as np
 import torch
 
-# 1) Load the config YAML instead of manual flags up here
+# 1) Load only --config_path, leave other flags in `remaining_argv`
 cfg_parser = argparse.ArgumentParser(add_help=False)
 cfg_parser.add_argument(
     "--config_path",
@@ -41,7 +41,7 @@ cfg_parser.add_argument(
     required=True,
     help="Path to a Hydra/OmegaConf YAML defining all params"
 )
-cfg_args, _ = cfg_parser.parse_known_args()
+cfg_args, remaining_argv = cfg_parser.parse_known_args()       # <-- keep the leftover args
 cfg = OmegaConf.load(cfg_args.config_path)
 
 # 2) Seed everything from the config
@@ -583,7 +583,8 @@ class Pipeline(LightningModule):
         return loss
 
     def training_step(self, batch, batch_idx):
-        return self.run_step(batch, batch_idx)
+        loss = self.run_step(batch, batch_idx)
+        return loss
 
     def on_save_checkpoint(self, checkpoint):
         if self.trainer.global_rank != 0:
@@ -599,6 +600,11 @@ class Pipeline(LightningModule):
         self.transformer.save_lora_adapter(
             lora_path, adapter_name=self.hparams.adapter_name
         )
+                               
+        # —— ADD THIS W&B CHECKPOINT ARTIFACT LOGGING HERE ——
+        ckpt = wandb.Artifact("model", type="checkpoint", metadata={"step": step})
+        ckpt.add_dir(lora_path)
+        wandb.log_artifact(ckpt)
 
         # Clean up old loras and only save the last few loras
         lora_paths = glob(os.path.join(checkpoint_dir, "*_lora"))
@@ -674,46 +680,82 @@ def main(args):
 
     trainer.fit(model)
 
-
 if __name__ == "__main__":
-    args = argparse.ArgumentParser()
+    import argparse
+    import yaml
+    import random
+    import numpy as np
+    import torch
+    from trainer_new import main
 
-    args.add_argument("--output_dir", type=str, default=None)
+    # 1) Define CLI flags (all default to None so we can override from YAML)
+    parser = argparse.ArgumentParser(description="Trainer for ACE-Step LoRA finetuning")
+    parser.add_argument("--config_path",             type=str,   help="YAML config file (optional)",            default=None)
+    parser.add_argument("--checkpoint_dir",          type=str,   help="ACE-Step base checkpoint directory",     default=None)
+    parser.add_argument("--shift",                   type=float, help="flow-matching scheduler shift value",    default=None)
+    parser.add_argument("--lora_config_path",        type=str,   help="LoRA config JSON",                       default=None)
+    parser.add_argument("--last_lora_path",          type=str,   help="Previous LoRA checkpoint",               default=None)
+    parser.add_argument("--dataset_path",            type=str,   help="HDF5 dataset directory",                 default=None)
+    parser.add_argument("--output_dir",              type=str,   help="where to write checkpoints",             default=None)
+    parser.add_argument("--devices",                 type=int,   help="number of GPUs to use",                  default=None)
+    parser.add_argument("--batch_size",              type=int,   help="training batch size",                    default=None)
+    parser.add_argument("--num_workers",             type=int,   help="DataLoader worker processes",            default=None)
+    parser.add_argument("--tag_dropout",             type=float, help="token-tag dropout rate",                 default=None)
+    parser.add_argument("--speaker_dropout",         type=float, help="speaker embedding dropout rate",         default=None)
+    parser.add_argument("--lyrics_dropout",          type=float, help="lyrics dropout rate",                    default=0)
+    parser.add_argument("--ssl_coeff",               type=float, help="SSL loss coefficient",                   default=None)
+    parser.add_argument("--optimizer",               type=str,   help="optimizer (adamw, prodigy)",             default=None)
+    parser.add_argument("--learning_rate",           type=float, help="optimizer learning rate",                default=None)
+    parser.add_argument("--beta1",                   type=float, help="optimizer β₁",                           default=None)
+    parser.add_argument("--beta2",                   type=float, help="optimizer β₂",                           default=None)
+    parser.add_argument("--epochs",                  type=int,   help="max training epochs",                    default=None)
+    parser.add_argument("--max_steps",               type=int,   help="max training steps",                     default=None)
+    parser.add_argument("--warmup_steps",            type=int,   help="learning-rate warmup steps",             default=None)
+    parser.add_argument("--accumulate_grad_batches", type=int,   help="gradient accumulation steps",            default=None)
+    parser.add_argument("--gradient_clip_val",       type=float, help="gradient clip value",                    default=None)
+    parser.add_argument("--gradient_clip_algorithm", type=str,   help="gradient clip algorithm (norm/value)",  default=None)
+    parser.add_argument("--exp_name",                type=str,   help="experiment name for W&B",                default=None)
+    parser.add_argument("--precision",               type=str,   help="Trainer precision (e.g. bf16-mixed)",    default=None)
+    parser.add_argument("--save_every_n_train_steps",type=int,  help="checkpoint frequency",                   default=None)
+    parser.add_argument("--save_last",               type=int,   help="how many last LoRAs to keep",           default=None)
+
+    args = parser.parse_args()
+
     
-    # Model
-    args.add_argument("--checkpoint_dir", type=str, default=None)
-    args.add_argument("--shift", type=float, default=3.0)
-    args.add_argument("--lora_config_path", type=str, default="./config/lora_config_transformer_only.json")
-    args.add_argument("--last_lora_path", type=str, default=None)
+    # 2) Load YAML
+    cfg = {}
+    if args.config_path:
+        with open(args.config_path, "r") as f:
+            cfg = yaml.safe_load(f)
 
-    # Data
-    args.add_argument("--dataset_path", type=str, default="hdf5")
-    args.add_argument("--batch_size", type=int, default=8)
-    args.add_argument("--num_workers", type=int, default=0)
-    args.add_argument("--tag_dropout", type=float, default=0.1)
-    args.add_argument("--speaker_dropout", type=float, default=0.1)
-    args.add_argument("--lyrics_dropout", type=float, default=0.0)
+        # 2a) Flatten nested sections into a single dict
+        flat_cfg = {}
+        flat_cfg.update(cfg)                       # top-level keys
+        flat_cfg.update(cfg.get("training", {}))   # pulls in learning_rate, optimizer, etc.
+        flat_cfg.update(cfg.get("dataset", {}))    # pulls in dataset_path, sample_rate
+        flat_cfg.update(cfg.get("logging", {})     # if you want project/tags too
+                       .get("wandb", {}))
 
-    # Optimizer
-    args.add_argument("--ssl_coeff", type=float, default=1.0)
-    args.add_argument("--optimizer", type=str, default="adamw")
-    args.add_argument("--learning_rate", type=float, default=0.001)
-    args.add_argument("--beta1", type=float, default=0.9)
-    args.add_argument("--beta2", type=float, default=0.99)
-    args.add_argument("--epochs", type=int, default=-1)
-    args.add_argument("--max_steps", type=int, default=10000)
-    args.add_argument("--warmup_steps", type=int, default=100)
-    args.add_argument("--accumulate_grad_batches", type=int, default=1)
-    args.add_argument("--gradient_clip_val", type=float, default=0.0)
-    args.add_argument("--gradient_clip_algorithm", type=str, default="norm")
+        # 2b) Override any CLI args still None
+        for key, val in flat_cfg.items():
+            if hasattr(args, key) and getattr(args, key) is None:
+                # If you suspect strings sneaking through, you can cast here:
+                if key == "learning_rate" and isinstance(val, str):
+                    val = float(val)
+                setattr(args, key, val)
 
-    # Others
-    args.add_argument("--devices", type=int, default=5)
-    # args.add_argument("--num_nodes", type=int, default=1)
-    args.add_argument("--exp_name", type=str, default="ace_step_lora")
-    args.add_argument("--precision", type=str, default="bf16-mixed")
-    args.add_argument("--save_every_n_train_steps", type=int, default=100)
-    args.add_argument("--save_last", type=int, default=99999)
+    # 4) Ensure required args are present
+    required = ["checkpoint_dir", "shift", "dataset_path", "output_dir", "devices"]
+    missing = [k for k in required if getattr(args, k) is None]
+    if missing:
+        raise ValueError(f"Missing required args: {missing}")
 
-    args = args.parse_args()
+    # 5) Seed everything
+    seed = cfg.get("seed", 2222)
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+
+    # 7) Launch training
     main(args)

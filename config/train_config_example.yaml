@@ -5,20 +5,38 @@ dataset:
   path: ./datasets/downbeat_8bar_overlap
   sample_rate: 44100
   tags: qwen_section_tags
+  
 training:
   batch_size: 4
-  learning_rate: 3e-5
+  learning_rate: 1e-5
+  tag_dropout: 0.0
+  speaker_dropout: 0.0
   lora:
     r: 16
     alpha: 32
-  optimizer: adamw
-  max_steps: 2000
-  tag_dropout: 0.1
+  beta1: 0.9
+  beta2: 0.99
   ssl_coeff: 0.3
   accumulate_grad_batches: 2
   gradient_clip_val: 1.0
+  shift: 3
   gradient_clip_algorithm: norm
+  save_every_n_train_steps: 100
+  warmup_steps: 100
+  precision: bf16-mixed
+  save_last: 999999
+  optimizer: adamw
+  epochs: 999999
+  max_steps: 300
 logging:
   wandb:
     project: ace-step-californication
     tags: ["dataset-2.2", "lora-r16-a32", "clip-norm"]
+
+exp_name: test_yaml
+lora_config_path: config/lora_config_transformer_only.json
+checkpoint_dir: ~/.cache/ace-step/checkpoints
+dataset_path: test_data_pp 
+num_workers: 1
+output_dir: /nfs/turbo/smtd-hwdong/ocamp/gitignore/test_checkpoints
+devices: 1
